@@ -1,0 +1,8 @@
+{
+  "name": "radar-pluie-cloudflare",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "h5wasm": "0.10.3"
+  }
+}
