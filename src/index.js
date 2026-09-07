@@ -35,8 +35,9 @@ export default {
     const rho =
       a * mTs * tLat / tTs;
 
-    const x = rho * Math.sin(lonRad);
-    const y = -rho * Math.cos(lonRad);
+
+    const x = rho * Math.sin(lonRad) + 619652.07;
+    const y = -rho * Math.cos(lonRad) + 5262818.34;
 
     // Paramètres du raster Météo-France
     const pixel = 500;
