@@ -1,77 +1,61 @@
+import h5wasm from "h5wasm";
+
 export default {
   async fetch(request, env) {
 
-    // Chartrettes
-    const lat = 48.483330;
-    const lon = 2.700000;
+    const url =
+      "https://public-api.meteofrance.fr/public/DPRadar/v1/" +
+      "mosaiques/METROPOLE/observations/LAME_D_EAU/produit?maille=500";
 
-    // Projection Météo-France
-    // +proj=stere +lat_0=90 +lon_0=0 +lat_ts=45
-    // +ellps=WGS84
-    const a = 6378137.0;
-    const e = 0.0818191908426;
+    const response = await fetch(url, {
+      headers: {
+        "apikey": env.METEOFRANCE_API_KEY
+      }
+    });
 
-    const latRad = lat * Math.PI / 180;
-    const lonRad = lon * Math.PI / 180;
-
-    const latTs = 45 * Math.PI / 180;
-
-    function t(phi) {
-      return Math.tan(Math.PI / 4 - phi / 2) /
-        Math.pow(
-          (1 - e * Math.sin(phi)) /
-          (1 + e * Math.sin(phi)),
-          e / 2
-        );
+    if (!response.ok) {
+      return new Response(
+        "Erreur Météo-France : " +
+        response.status + " " +
+        await response.text(),
+        { status: 500 }
+      );
     }
 
-    const tLat = t(latRad);
-    const tTs = t(latTs);
+    const buffer = await response.arrayBuffer();
 
-    const mTs =
-      Math.cos(latTs) /
-      Math.sqrt(1 - e * e * Math.sin(latTs) ** 2);
+    const Module = await h5wasm.ready;
+    const { FS } = Module;
 
-    const rho =
-      a * mTs * tLat / tTs;
+    FS.writeFile("/radar.h5", new Uint8Array(buffer));
 
+    const file = new h5wasm.File("/radar.h5", "r");
+    const dataset = file.get("dataset1/data1/data");
 
-    const x = rho * Math.sin(lonRad) + 619652.07;
-    const y = -rho * Math.cos(lonRad) + 5262818.34;
+    // Pixel de Chartrettes
+    const ligne = 1207;
+    const colonne = 1628;
 
-    // Paramètres du raster Météo-France
-    const pixel = 500;
+    const data = dataset.value;
+    const cols = dataset.shape[1];
 
-    const originX = -0.0040559091139585;
-    const originY = 1736000.0020674658;
+    const valeurBrute = data[ligne * cols + colonne];
 
-    const colonne = Math.floor(
-      (x - originX) / pixel
-    );
-
-    const ligne = Math.floor(
-      (originY - y) / pixel
-    );
+    // Météo-France : gain = 0.01
+    const pluieMm = valeurBrute * 0.01;
 
     return new Response(
       JSON.stringify({
-        point: {
-          latitude: lat,
-          longitude: lon
-        },
-        projection: {
-          x: x,
-          y: y
-        },
+        ok: true,
+        point: "Chartrettes",
+        latitude: 48.483330,
+        longitude: 2.700000,
         pixel: {
           ligne: ligne,
           colonne: colonne
         },
-        dans_raster:
-          ligne >= 0 &&
-          ligne < 3472 &&
-          colonne >= 0 &&
-          colonne < 3472
+        valeur_brute: valeurBrute,
+        pluie_mm: pluieMm
       }, null, 2),
       {
         headers: {
