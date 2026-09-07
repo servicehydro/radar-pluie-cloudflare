@@ -36,17 +36,10 @@ export default {
     const dataset1 = file.get("dataset1");
 
     return new Response(
+return new Response(
   JSON.stringify({
-    dataset: {
-      shape: dataset.shape,
-      dtype: dataset.dtype,
-      attrs: Object.keys(dataset.attrs || {})
-    },
-    data1: {
-      attrs: Object.keys(data1.attrs || {})
-    },
-    dataset1: {
-      attrs: Object.keys(dataset1.attrs || {})
+    root: {
+      attrs: Object.keys(file.attrs || {})
     }
   }, null, 2),
   {
