@@ -41,21 +41,43 @@ export default {
 
     const valeurBrute = data[ligne * cols + colonne];
 
-    // Météo-France : gain = 0.01
+    // Valeur radar en mm
     const pluieMm = valeurBrute * 0.01;
+
+    // Heure de la mesure
+    const maintenant = new Date();
+    const timestamp = maintenant.toISOString();
+
+    // Une mesure = une clé KV
+    const cle = `radar_chartrettes_${timestamp}`;
+
+    await env.RADAR_KV.put(
+      cle,
+      JSON.stringify({
+        point: "Chartrettes",
+        latitude: 48.483330,
+        longitude: 2.700000,
+        timestamp: timestamp,
+        valeur_brute: valeurBrute,
+        pluie_mm: pluieMm
+      })
+    );
 
     return new Response(
       JSON.stringify({
         ok: true,
         point: "Chartrettes",
-        latitude: 48.483330,
-        longitude: 2.700000,
+        timestamp: timestamp,
         pixel: {
           ligne: ligne,
           colonne: colonne
         },
         valeur_brute: valeurBrute,
-        pluie_mm: pluieMm
+        pluie_mm: pluieMm,
+        kv: {
+          cle: cle,
+          enregistre: true
+        }
       }, null, 2),
       {
         headers: {
