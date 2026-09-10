@@ -2,9 +2,17 @@
   "name": "radar-pluie-test",
   "main": "src/index.js",
   "compatibility_date": "2026-09-03",
+
   "triggers": {
     "crons": [
       "0 * * * *"
     ]
-  }
+  },
+
+  "kv_namespaces": [
+    {
+      "binding": "RADAR_KV",
+      "id": "0b77f02fdc4e48f180b35b7532f1143b"
+    }
+  ]
 }
