@@ -24,9 +24,25 @@ async function recupererRadar(env) {
 
   if (!response.ok) {
     throw new Error(
-      `Erreur Météo-France ${response.status}: ${await response.text()}`
+      `Meteo-France ${response.status}: ${await response.text()}`
     );
   }
+
+  // Récupération de l'heure du fichier radar
+  const disposition = response.headers.get("content-disposition") || "";
+  const match = disposition.match(/(\d{14})/);
+
+  if (!match) {
+    throw new Error(
+      "Horodatage du produit radar introuvable dans Content-Disposition"
+    );
+  }
+
+  const s = match[1];
+
+  const timestamp =
+    `${s.substring(0,4)}-${s.substring(4,6)}-${s.substring(6,8)}T` +
+    `${s.substring(8,10)}:${s.substring(10,12)}:${s.substring(12,14)}Z`;
 
   const buffer = await response.arrayBuffer();
 
@@ -46,30 +62,49 @@ async function recupererRadar(env) {
   const cols = dataset.shape[1];
 
   const valeurBrute = data[ligne * cols + colonne];
-  const pluieMm = valeurBrute * 0.01;
 
-  const timestamp = new Date().toISOString();
+  // 65535 = no data
+  // 65534 = sous le seuil de détection
+  const pluieMm =
+    valeurBrute === 65535 || valeurBrute === 65534
+      ? 0
+      : valeurBrute * 0.01;
 
-  // Une seule valeur par heure
-  const cle = `radar_chartrettes_${timestamp}`;
+  // Lecture de l'historique
+  let historique = [];
 
+  const ancien = await env.RADAR_KV.get("radar_history", "json");
+
+  if (ancien && Array.isArray(ancien)) {
+    historique = ancien;
+  }
+
+  // Ajout de la nouvelle mesure
+  historique.push({
+    t: timestamp,
+    p: pluieMm
+  });
+
+  // Conservation de 15 jours
+  const limite =
+    new Date(timestamp).getTime() - 15 * 24 * 60 * 60 * 1000;
+
+  historique = historique.filter(
+    m => new Date(m.t).getTime() >= limite
+  );
+
+  // Une seule écriture KV
   await env.RADAR_KV.put(
-    cle,
-    JSON.stringify({
-      point: "Chartrettes",
-      timestamp,
-      valeur_brute: valeurBrute,
-      pluie_mm: pluieMm
-    })
+    "radar_history",
+    JSON.stringify(historique)
   );
 
   return new Response(
     JSON.stringify({
       ok: true,
-      point: "Chartrettes",
       timestamp,
       pluie_mm: pluieMm,
-      kv: cle
+      mesures_stockees: historique.length
     }, null, 2),
     {
       headers: {
