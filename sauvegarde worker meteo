@@ -1,0 +1,1707 @@
+/**
+ * Welcome to Cloudflare Workers! This is your first worker.
+ *
+ * - Run "npm run dev" in your terminal to start a development server
+ * - Open a browser tab at http://localhost:8787/ to see your worker in action
+ * - Run "npm run deploy" to publish your worker
+ *
+ * Learn more at https://developers.cloudflare.com/workers/
+ */
+export default {
+
+  // ==================================================
+  // CRON : toutes les heures
+  // ==================================================
+
+  async scheduled(event, env, ctx) {
+
+    ctx.waitUntil(
+      collecteEtStockage(env)
+    );
+
+  },
+
+
+  // ==================================================
+  // PAGE WEB
+  // ==================================================
+
+  async fetch(request, env) {
+
+    try {
+
+      return new Response(
+        await afficherPage(env),
+        {
+          headers: {
+            "content-type":
+              "text/html; charset=UTF-8"
+          }
+        }
+      );
+
+    } catch (error) {
+
+      return new Response(
+        `Erreur Worker : ${error.message}`,
+        {
+          status: 500,
+          headers: {
+            "content-type":
+              "text/plain; charset=UTF-8"
+          }
+        }
+      );
+
+    }
+
+  }
+
+};
+
+
+// ==================================================
+// VIGICRUES
+// ==================================================
+
+async function getDebit(station) {
+
+  const url =
+    `https://www.vigicrues.gouv.fr/services/observations.json` +
+    `?CdStationHydro=${station}` +
+    `&GrdSerie=Q` +
+    `&FormatDate=iso`;
+
+  const response =
+    await fetch(url);
+
+  if (!response.ok) {
+
+    throw new Error(
+      `Vigicrues HTTP ${response.status}`
+    );
+
+  }
+
+  const data =
+    await response.json();
+
+  const observations =
+    data?.Serie?.ObssHydro;
+
+  if (
+    !Array.isArray(observations) ||
+    observations.length === 0
+  ) {
+
+    throw new Error(
+      `Aucune observation pour ${station}`
+    );
+
+  }
+
+  const derniere =
+    observations[
+      observations.length - 1
+    ];
+
+  return {
+
+    debit:
+      Number(derniere.ResObsHydro),
+
+    dateObservation:
+      derniere.DtObsHydro
+
+  };
+
+}
+
+
+// ==================================================
+// SGL
+// ==================================================
+//
+// Table 56 : historique des mesures
+//
+// Pour chaque point :
+// - recherche de toutes les mesures
+// - tri par date décroissante
+// - conservation de la dernière
+//
+// Points utilisés :
+// Aube5
+// Aube6
+// Aube7
+// Aube10
+// Seine7
+// Pann3
+// Pann8
+//
+// ==================================================
+
+async function getSGL(idPoint) {
+
+  const url =
+    `https://sig.seinegrandslacs.fr/arcgis/rest/services/OGDE_mesures/FeatureServer/56/query` +
+    `?where=id_spot%3D%27${encodeURIComponent(idPoint)}%27` +
+    `&outFields=objectid,id_spot,date,valeur` +
+    `&orderByFields=date%20DESC` +
+    `&resultRecordCount=1` +
+    `&returnGeometry=false` +
+    `&f=json`;
+
+  const response =
+    await fetch(url);
+
+  if (!response.ok) {
+
+    throw new Error(
+      `SGL HTTP ${response.status} pour ${idPoint}`
+    );
+
+  }
+
+  const data =
+    await response.json();
+
+  if (
+    !data.features ||
+    data.features.length === 0
+  ) {
+
+    throw new Error(
+      `Aucune donnée SGL pour ${idPoint}`
+    );
+
+  }
+
+  const a =
+    data.features[0].attributes;
+
+  const debit =
+    Number(a.valeur);
+
+  if (!Number.isFinite(debit)) {
+
+    throw new Error(
+      `Valeur SGL invalide pour ${idPoint}`
+    );
+
+  }
+
+  return {
+
+    id:
+      a.id_spot,
+
+    debit:
+      debit,
+
+    date:
+      a.date
+
+  };
+
+}
+
+
+// ==================================================
+// COLLECTE
+// ==================================================
+
+async function collecteEtStockage(env) {
+
+  // --------------------------------------------------
+  // VIGICRUES
+  // --------------------------------------------------
+
+  const montereau =
+    await getDebit("F400000102");
+
+  const episy =
+    await getDebit("F439000101");
+
+
+  // --------------------------------------------------
+  // DÉBIT ESTIMÉ À CHARTRETTES
+  // --------------------------------------------------
+
+  const total =
+    montereau.debit +
+    episy.debit;
+
+
+  // --------------------------------------------------
+  // SGL
+  // --------------------------------------------------
+
+  const sgl = {
+
+    aube: {
+      aube5: null,
+      aube6: null,
+      aube7: null,
+      aube10: null,
+      total: 0,
+      erreurs: []
+    },
+
+    seine: {
+      debit: null,
+      erreurs: []
+    },
+
+    panneciere: {
+      montigny: null,
+      corancy: null,
+      debitBrut: null,
+      debitRelache: null,
+      erreurs: []
+    },
+
+    total: 0,
+    erreurs: []
+
+  };
+
+
+  // --------------------------------------------------
+  // AUBE
+  // --------------------------------------------------
+
+  const aubePoints = [
+    ["aube5", "Aube5"],
+    ["aube6", "Aube6"],
+    ["aube7", "Aube7"],
+    ["aube10", "Aube10"]
+  ];
+
+  for (const [nom, idPoint] of aubePoints) {
+
+    try {
+
+      const mesure =
+        await getSGL(idPoint);
+
+      sgl.aube[nom] = mesure;
+
+      sgl.aube.total +=
+        mesure.debit;
+
+    } catch (error) {
+
+      const message =
+        `${idPoint} : ${error.message}`;
+
+      sgl.aube.erreurs.push(message);
+      sgl.erreurs.push(message);
+
+    }
+
+  }
+
+
+  // --------------------------------------------------
+  // SEINE
+  // --------------------------------------------------
+
+  try {
+
+    const seine7 =
+      await getSGL("Seine7");
+
+    sgl.seine.debit =
+      seine7.debit;
+
+    sgl.seine.observation =
+      seine7.date;
+
+    sgl.seine.mesure =
+      seine7;
+
+  } catch (error) {
+
+    const message =
+      `Seine7 : ${error.message}`;
+
+    sgl.seine.erreurs.push(message);
+    sgl.erreurs.push(message);
+
+  }
+
+
+  // --------------------------------------------------
+  // PANNECIERE
+  //
+  // Montigny - Corancy
+  //
+  // Si négatif :
+  // stockage
+  // donc débit relâché = 0
+  // --------------------------------------------------
+
+  let pann3 = null;
+  let pann8 = null;
+
+
+  try {
+
+    pann3 =
+      await getSGL("Pann3");
+
+    sgl.panneciere.montigny =
+      pann3;
+
+  } catch (error) {
+
+    const message =
+      `Pann3 : ${error.message}`;
+
+    sgl.panneciere.erreurs.push(message);
+    sgl.erreurs.push(message);
+
+  }
+
+
+  try {
+
+    pann8 =
+      await getSGL("Pann8");
+
+    sgl.panneciere.corancy =
+      pann8;
+
+  } catch (error) {
+
+    const message =
+      `Pann8 : ${error.message}`;
+
+    sgl.panneciere.erreurs.push(message);
+    sgl.erreurs.push(message);
+
+  }
+
+
+  // --------------------------------------------------
+  // CALCUL PANNECIERE
+  // --------------------------------------------------
+
+  if (
+    pann3 &&
+    pann8
+  ) {
+
+    const debitPanneciereBrut =
+      pann3.debit -
+      pann8.debit;
+
+    sgl.panneciere.debitBrut =
+      debitPanneciereBrut;
+
+    sgl.panneciere.debitRelache =
+      Math.max(
+        0,
+        debitPanneciereBrut
+      );
+
+  }
+
+
+  // --------------------------------------------------
+  // TOTAL SGL
+  // --------------------------------------------------
+
+  sgl.total =
+    sgl.aube.total +
+    (sgl.seine.debit || 0) +
+    (sgl.panneciere.debitRelache || 0);
+
+
+  // --------------------------------------------------
+  // HEURE DE COLLECTE
+  // --------------------------------------------------
+
+  const maintenant =
+    new Date();
+
+  const heure =
+    new Date(maintenant);
+
+  heure.setMinutes(
+    0,
+    0,
+    0
+  );
+
+
+  const cle =
+    "debit_" +
+    heure.toISOString();
+
+
+  // --------------------------------------------------
+  // OBJET MESURE
+  // --------------------------------------------------
+
+  const mesure = {
+
+    collecte:
+      maintenant.toISOString(),
+
+    montereau: {
+
+      debit:
+        montereau.debit,
+
+      observation:
+        montereau.dateObservation
+
+    },
+
+
+    episy: {
+
+      debit:
+        episy.debit,
+
+      observation:
+        episy.dateObservation
+
+    },
+
+
+    total:
+      total,
+
+
+    sgl:
+      sgl
+
+  };
+
+
+  // --------------------------------------------------
+  // KV
+  // --------------------------------------------------
+
+  await env[
+    "HYDRO-CHARTDATA"
+  ].put(
+
+    cle,
+
+    JSON.stringify(
+      mesure
+    )
+
+  );
+
+}
+
+
+// ==================================================
+// AFFICHAGE
+// ==================================================
+
+async function afficherPage(env) {
+
+  const liste =
+    await env[
+      "HYDRO-CHARTDATA"
+    ].list({
+
+      prefix:
+        "debit_"
+
+    });
+
+
+  if (
+    !liste.keys ||
+    liste.keys.length === 0
+  ) {
+
+    return pageVide();
+
+  }
+
+
+  const cles =
+    liste.keys
+      .map(
+        key => key.name
+      )
+      .sort()
+      .reverse();
+
+
+  const derniereCle =
+    cles[0];
+
+
+  const texte =
+    await env[
+      "HYDRO-CHARTDATA"
+    ].get(
+      derniereCle
+    );
+
+
+  if (!texte) {
+
+    return pageVide();
+
+  }
+
+
+  const mesure =
+    JSON.parse(texte);
+
+
+  return pageAvecMesure(
+    mesure
+  );
+
+}
+
+
+// ==================================================
+// PAGE VIDE
+// ==================================================
+
+function pageVide() {
+
+  return `
+
+<!DOCTYPE html>
+
+<html lang="fr">
+
+<head>
+
+<meta charset="UTF-8">
+
+<title>Hydro Chartrettes</title>
+
+<style>
+
+html, body {
+
+  margin: 0;
+  width: 100%;
+  height: 100%;
+
+  font-family: Arial, sans-serif;
+
+  background: #f3f5f7;
+
+}
+
+body {
+
+  padding: 12px;
+
+}
+
+.card {
+
+  background: white;
+
+  padding: 20px;
+
+  border-radius: 8px;
+
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="card">
+
+<h1>
+Hydro Chartrettes
+</h1>
+
+<p>
+Aucune mesure enregistrée.
+</p>
+
+</div>
+
+</body>
+
+</html>
+
+`;
+
+}
+
+
+// ==================================================
+// PAGE PRINCIPALE
+// ==================================================
+
+function pageAvecMesure(mesure) {
+
+  // --------------------------------------------------
+  // VIGICRUES
+  // --------------------------------------------------
+
+  const montereau =
+    mesure.montereau || {};
+
+  const episy =
+    mesure.episy || {};
+
+  const total =
+    Number(mesure.total || 0);
+
+
+  // --------------------------------------------------
+  // SGL
+  // --------------------------------------------------
+
+  const sgl =
+    mesure.sgl || null;
+
+
+  const sglDisponible =
+    sgl &&
+    sgl.aube &&
+    sgl.seine &&
+    sgl.panneciere;
+
+
+  // --------------------------------------------------
+  // DÉCALAGE VIGICRUES
+  // --------------------------------------------------
+
+  let decalageMinutes =
+    0;
+
+
+  if (
+    montereau.observation &&
+    episy.observation
+  ) {
+
+    const dateM =
+      new Date(
+        montereau.observation
+      );
+
+    const dateE =
+      new Date(
+        episy.observation
+      );
+
+    decalageMinutes =
+      Math.abs(
+        dateM.getTime() -
+        dateE.getTime()
+      ) / 60000;
+
+  }
+
+
+  const decalageSuperieurUneHeure =
+    decalageMinutes > 60;
+
+
+  // --------------------------------------------------
+  // FORMAT DATE VIGICRUES
+  // --------------------------------------------------
+
+  function formatDate(date) {
+
+    if (!date) {
+
+      return "—";
+
+    }
+
+    return new Date(date)
+      .toLocaleString(
+        "fr-FR",
+        {
+          timeZone:
+            "Europe/Paris",
+
+          day:
+            "2-digit",
+
+          month:
+            "2-digit",
+
+          year:
+            "numeric",
+
+          hour:
+            "2-digit",
+
+          minute:
+            "2-digit"
+
+        }
+      );
+
+  }
+
+
+  // --------------------------------------------------
+  // FORMAT DATE SGL
+  // --------------------------------------------------
+
+  function formatSGLDate(date) {
+
+    if (
+      date === null ||
+      date === undefined
+    ) {
+
+      return "—";
+
+    }
+
+    return new Date(
+      Number(date)
+    )
+      .toLocaleString(
+        "fr-FR",
+        {
+          timeZone:
+            "Europe/Paris",
+
+          day:
+            "2-digit",
+
+          month:
+            "2-digit",
+
+          year:
+            "numeric",
+
+          hour:
+            "2-digit",
+
+          minute:
+            "2-digit"
+
+        }
+      );
+
+  }
+
+
+  // --------------------------------------------------
+  // FORMAT DÉBIT
+  // --------------------------------------------------
+
+  function formatDebit(value) {
+
+    if (
+      value === null ||
+      value === undefined ||
+      Number.isNaN(
+        Number(value)
+      )
+    ) {
+
+      return "—";
+
+    }
+
+    return Number(value)
+      .toFixed(1);
+
+  }
+
+
+  // --------------------------------------------------
+  // AFFICHAGE SGL
+  // --------------------------------------------------
+
+  let blocSGL = "";
+
+
+  if (sglDisponible) {
+
+    const erreursSGL =
+      Array.isArray(sgl.erreurs)
+        ? sgl.erreurs
+        : [];
+
+
+    blocSGL = `
+
+<h2>
+Seine Grands Lacs
+</h2>
+
+<div class="sgl-total">
+
+${formatDebit(
+  sgl.total
+)}
+m³/s
+
+</div>
+
+<div class="subtitle">
+
+Débit cumulé restitué par SGL
+
+</div>
+
+
+<table style="margin-top:10px">
+
+<tr>
+
+<th>
+Restitution
+</th>
+
+<th>
+Débit
+</th>
+
+<th>
+Mesure
+</th>
+
+</tr>
+
+
+<tr>
+
+<td>
+Aube
+</td>
+
+<td>
+
+${formatDebit(
+  sgl.aube.total
+)}
+m³/s
+
+</td>
+
+<td class="station-date">
+
+Aube5 :
+${sgl.aube.aube5
+  ? formatSGLDate(
+      sgl.aube.aube5.date
+    )
+  : "ERREUR"}
+
+<br>
+
+Aube6 :
+${sgl.aube.aube6
+  ? formatSGLDate(
+      sgl.aube.aube6.date
+    )
+  : "ERREUR"}
+
+<br>
+
+Aube7 :
+${sgl.aube.aube7
+  ? formatSGLDate(
+      sgl.aube.aube7.date
+    )
+  : "ERREUR"}
+
+<br>
+
+Aube10 :
+${sgl.aube.aube10
+  ? formatSGLDate(
+      sgl.aube.aube10.date
+    )
+  : "ERREUR"}
+
+</td>
+
+</tr>
+
+
+<tr>
+
+<td>
+Seine
+</td>
+
+<td>
+
+${formatDebit(
+  sgl.seine.debit
+)}
+m³/s
+
+</td>
+
+<td class="station-date">
+
+${sgl.seine.mesure
+  ? formatSGLDate(
+      sgl.seine.mesure.date
+    )
+  : "ERREUR"}
+
+</td>
+
+</tr>
+
+
+<tr>
+
+<td>
+Pannecière → Yonne
+</td>
+
+<td>
+
+${formatDebit(
+  sgl.panneciere.debitRelache
+)}
+m³/s
+
+</td>
+
+<td class="station-date">
+
+M :
+${sgl.panneciere.montigny
+  ? formatSGLDate(
+      sgl.panneciere.montigny.date
+    )
+  : "ERREUR"}
+
+<br>
+
+C :
+${sgl.panneciere.corancy
+  ? formatSGLDate(
+      sgl.panneciere.corancy.date
+    )
+  : "ERREUR"}
+
+</td>
+
+</tr>
+
+
+<tr class="total">
+
+<td>
+TOTAL SGL
+</td>
+
+<td>
+
+${formatDebit(
+  sgl.total
+)}
+m³/s
+
+</td>
+
+<td></td>
+
+</tr>
+
+</table>
+
+
+${
+  erreursSGL.length > 0
+
+  ? `
+
+<div class="warning">
+
+⚠ Erreur sur une ou plusieurs mesures SGL :
+
+<br><br>
+
+${erreursSGL.join("<br>")}
+
+<br><br>
+
+Les autres valeurs disponibles sont conservées dans le calcul.
+
+</div>
+
+`
+
+  : ""
+
+}
+
+`;
+
+  } else {
+
+    blocSGL = `
+
+<h2>
+Seine Grands Lacs
+</h2>
+
+<div class="sgl-total">
+
+—
+
+</div>
+
+<div class="subtitle">
+
+Débit cumulé restitué par SGL
+
+</div>
+
+<div class="sgl-error">
+
+Données SGL non disponibles pour cette mesure.
+
+<br><br>
+
+Erreur :
+${sgl?.erreur || "erreur inconnue"}
+
+</div>
+
+`;
+
+  }
+
+
+  // --------------------------------------------------
+  // PAGE
+  // --------------------------------------------------
+
+  return `
+
+<!DOCTYPE html>
+
+<html lang="fr">
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta name="viewport"
+      content="width=device-width, initial-scale=1.0">
+
+<meta http-equiv="refresh"
+      content="300">
+
+<title>
+Hydro Chartrettes
+</title>
+
+
+<style>
+
+* {
+
+  box-sizing: border-box;
+
+}
+
+
+html,
+body {
+
+  margin: 0;
+  padding: 0;
+
+  width: 100%;
+  height: 100%;
+
+  overflow: hidden;
+
+  font-family:
+    Arial,
+    sans-serif;
+
+  background:
+    #f3f5f7;
+
+  color:
+    #222;
+
+}
+
+
+body {
+
+  padding:
+    12px;
+
+}
+
+
+.dashboard {
+
+  height:
+    100%;
+
+  display:
+    grid;
+
+  grid-template-columns:
+    1fr 1fr;
+
+  grid-template-rows:
+    auto 1fr 1fr;
+
+  gap:
+    10px;
+
+}
+
+
+.header {
+
+  grid-column:
+    1 / 3;
+
+  display:
+    flex;
+
+  justify-content:
+    space-between;
+
+  align-items:
+    center;
+
+  background:
+    white;
+
+  padding:
+    10px 16px;
+
+  border-radius:
+    8px;
+
+}
+
+
+.header h1 {
+
+  margin:
+    0;
+
+  font-size:
+    24px;
+
+}
+
+
+.card {
+
+  background:
+    white;
+
+  border-radius:
+    8px;
+
+  padding:
+    14px;
+
+  overflow:
+    hidden;
+
+}
+
+
+.card h2 {
+
+  margin:
+    0 0 10px 0;
+
+  font-size:
+    17px;
+
+}
+
+
+.main-value {
+
+  font-size:
+    38px;
+
+  font-weight:
+    bold;
+
+  margin:
+    4px 0 8px 0;
+
+}
+
+
+.sgl-total {
+
+  font-size:
+    32px;
+
+  font-weight:
+    bold;
+
+  margin:
+    4px 0 12px 0;
+
+}
+
+
+.subtitle {
+
+  font-size:
+    12px;
+
+  color:
+    #666;
+
+}
+
+
+table {
+
+  width:
+    100%;
+
+  border-collapse:
+    collapse;
+
+  font-size:
+    13px;
+
+}
+
+
+th,
+td {
+
+  padding:
+    6px 5px;
+
+  text-align:
+    left;
+
+  border-bottom:
+    1px solid #e5e5e5;
+
+}
+
+
+.total {
+
+  font-weight:
+    bold;
+
+  font-size:
+    14px;
+
+}
+
+
+.station-date {
+
+  font-size:
+    10px;
+
+  color:
+    #777;
+
+  margin-top:
+    2px;
+
+}
+
+
+.warning {
+
+  margin-top:
+    10px;
+
+  padding:
+    8px 10px;
+
+  border-radius:
+    5px;
+
+  background:
+    #fff0f0;
+
+  color:
+    #c00000;
+
+  font-size:
+    12px;
+
+  font-weight:
+    bold;
+
+}
+
+
+.sgl-error {
+
+  margin-top:
+    15px;
+
+  padding:
+    8px;
+
+  background:
+    #f3f5f7;
+
+  border-radius:
+    5px;
+
+  font-size:
+    12px;
+
+  color:
+    #777;
+
+}
+
+
+.placeholder {
+
+  height:
+    calc(100% - 35px);
+
+  display:
+    flex;
+
+  align-items:
+    center;
+
+  justify-content:
+    center;
+
+  background:
+    #f3f5f7;
+
+  border-radius:
+    6px;
+
+  color:
+    #777;
+
+  font-size:
+    13px;
+
+}
+
+
+@media (max-width: 900px) {
+
+  html,
+  body {
+
+    overflow:
+      auto;
+
+  }
+
+
+  .dashboard {
+
+    height:
+      auto;
+
+    grid-template-columns:
+      1fr;
+
+    grid-template-rows:
+      auto;
+
+  }
+
+
+  .header {
+
+    grid-column:
+      1;
+
+  }
+
+}
+
+</style>
+
+</head>
+
+
+<body>
+
+
+<div class="dashboard">
+
+
+<!-- ============================================== -->
+<!-- HEADER -->
+<!-- ============================================== -->
+
+<div class="header">
+
+<h1>
+Hydro Chartrettes
+</h1>
+
+<div style="
+font-size:12px;
+color:#666;
+">
+
+Dernière collecte :
+${formatDate(
+  mesure.collecte
+)}
+
+</div>
+
+</div>
+
+
+<!-- ============================================== -->
+<!-- DÉBIT CHARTRETTES -->
+<!-- ============================================== -->
+
+<div class="card">
+
+<h2>
+Débit estimé à Chartrettes
+</h2>
+
+
+<div class="main-value">
+
+${formatDebit(total)}
+m³/s
+
+</div>
+
+
+<div class="subtitle">
+
+Montereau + Épisy
+
+</div>
+
+
+<table style="margin-top:10px">
+
+
+<tr>
+
+<th>
+Station
+</th>
+
+<th>
+Débit
+</th>
+
+<th>
+Surface
+</th>
+
+</tr>
+
+
+<tr>
+
+<td>
+
+Seine — Montereau
+
+<div class="station-date">
+
+Mesure :
+${formatDate(
+  montereau.observation
+)}
+
+</div>
+
+</td>
+
+
+<td>
+
+${formatDebit(
+  montereau.debit
+)}
+m³/s
+
+</td>
+
+
+<td>
+
+21 178 km²
+
+</td>
+
+</tr>
+
+
+<tr>
+
+<td>
+
+Loing — Épisy
+
+<div class="station-date">
+
+Mesure :
+${formatDate(
+  episy.observation
+)}
+
+</div>
+
+</td>
+
+
+<td>
+
+${formatDebit(
+  episy.debit
+)}
+m³/s
+
+</td>
+
+
+<td>
+
+3 900 km²
+
+</td>
+
+</tr>
+
+
+<tr class="total">
+
+<td>
+TOTAL
+</td>
+
+<td>
+
+${formatDebit(total)}
+m³/s
+
+</td>
+
+<td></td>
+
+</tr>
+
+
+</table>
+
+
+${
+  decalageSuperieurUneHeure
+
+  ? `
+
+<div class="warning">
+
+⚠ Attention : décalage des relevés entre les stations :
+${Math.round(
+  decalageMinutes
+)}
+minutes
+
+</div>
+
+`
+
+  : ""
+
+}
+
+
+</div>
+
+
+<!-- ============================================== -->
+<!-- SGL -->
+<!-- ============================================== -->
+
+<div class="card">
+
+${blocSGL}
+
+</div>
+
+
+<!-- ============================================== -->
+<!-- GRAPHE -->
+<!-- ============================================== -->
+
+<div class="card">
+
+<h2>
+Débit — mois en cours
+</h2>
+
+
+<div class="placeholder">
+
+Graphe à venir
+
+</div>
+
+
+</div>
+
+
+<!-- ============================================== -->
+<!-- PRÉCIPITATIONS -->
+<!-- ============================================== -->
+
+<div class="card">
+
+<h2>
+Précipitations cumulées radar
+</h2>
+
+
+<div class="placeholder">
+
+Données à venir
+
+</div>
+
+
+</div>
+
+
+</div>
+
+
+</body>
+
+</html>
+
+`;
+
+}
