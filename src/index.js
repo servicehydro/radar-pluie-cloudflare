@@ -21,7 +21,36 @@ export default {
     ctx.waitUntil(recupererRadar(env));
   }
 };
+function calculerCumuls(historique, index, maintenant) {
 
+  const periodes = {
+    "12h": 12 * 60 * 60 * 1000,
+    "24h": 24 * 60 * 60 * 1000,
+    "2j": 2 * 24 * 60 * 60 * 1000,
+    "6j": 6 * 24 * 60 * 60 * 1000,
+    "15j": 15 * 24 * 60 * 60 * 1000
+  };
+
+  const result = {};
+
+  for (const [nom, duree] of Object.entries(periodes)) {
+
+    const limite = maintenant - duree;
+    let somme = 0;
+
+    for (const mesure of historique) {
+      const t = new Date(mesure.t).getTime();
+
+      if (t > limite && t <= maintenant) {
+        somme += mesure.p[index] || 0;
+      }
+    }
+
+    result[nom] = Math.round(somme * 100) / 100;
+  }
+
+  return result;
+}
 async function recupererRadar(env) {
 
   const url =
