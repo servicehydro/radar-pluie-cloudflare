@@ -135,15 +135,21 @@ async function recupererRadar(env) {
     JSON.stringify(historique)
   );
 
+
+const maintenantMs = new Date(timestamp).getTime();
+
+const cumuls = POINTS.map((point, i) => ({
+  nom: point.nom,
+  pluie_5min_mm: pluies[i],
+  cumuls_mm: calculerCumuls(historique, i, maintenantMs)
+}));
+
   return new Response(
     JSON.stringify({
       ok: true,
       timestamp,
       mesures_stockees: historique.length,
-      points: POINTS.map((point, i) => ({
-        nom: point.nom,
-        pluie_mm: pluies[i]
-      }))
+      points: cumuls
     }, null, 2),
     {
       headers: {
@@ -151,4 +157,5 @@ async function recupererRadar(env) {
       }
     }
   );
+
 }
