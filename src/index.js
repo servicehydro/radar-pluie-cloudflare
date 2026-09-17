@@ -1,3 +1,4 @@
+import { fromArrayBuffer } from "geotiff";
 export default {
   async fetch(request, env) {
 
@@ -56,18 +57,80 @@ export default {
     }
 
     if (couvertures.length === 0) {
+    const coverageResponse =
+      await fetch(coverageUrl, {
+        headers: {
+          apikey: env.METEOFRANCE_API_KEY
+        }
+      });
+
+    const buffer =
+      await coverageResponse.arrayBuffer();
+
+    if (!coverageResponse.ok) {
       return new Response(
         JSON.stringify({
           ok: false,
-          erreur: "Aucun coverage AROME P2D trouvé"
+          status: coverageResponse.status,
+          message:
+            new TextDecoder()
+              .decode(buffer)
         }, null, 2),
         {
           status: 500,
           headers: {
-            "content-type": "application/json;charset=UTF-8"
+            "content-type":
+              "application/json;charset=UTF-8"
           }
         }
       );
+    }
+
+    // Lecture du GeoTIFF
+    const tiff =
+      await fromArrayBuffer(buffer);
+
+    const image =
+      await tiff.getImage();
+
+    const raster =
+      await image.readRasters({
+        interleave: true
+      });
+
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        run: dernier.run,
+        echeance_48h: echeance,
+        coverageId: dernier.coverageId,
+
+        largeur:
+          image.getWidth(),
+
+        hauteur:
+          image.getHeight(),
+
+        valeur_brute:
+          raster[0],
+
+        origine:
+          image.getOrigin(),
+
+        resolution:
+          image.getResolution(),
+
+        bbox:
+          image.getBoundingBox()
+
+      }, null, 2),
+      {
+        headers: {
+          "content-type":
+            "application/json;charset=UTF-8"
+        }
+      }
+    );
     }
 
     couvertures.sort((a, b) =>
