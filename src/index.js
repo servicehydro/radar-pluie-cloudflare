@@ -92,6 +92,7 @@ export default {
         new Date(runIso).getTime() +
         48 * 60 * 60 * 1000
       ).toISOString();
+    .replace(".000Z", "Z");
 
     // --------------------------------------------------
     // 4. GetCoverage sur Chartrettes
