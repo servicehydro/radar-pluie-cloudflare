@@ -8,7 +8,6 @@ const LAT = 48.4881157;
 const LON = 2.7005289;
 
 export default {
-
   async fetch(request, env) {
 
     try {
@@ -22,18 +21,15 @@ export default {
         "/GetCapabilities" +
         "?service=WCS&version=2.0.1&language=fre";
 
-      const capResponse =
-        await fetch(capUrl, {
-          headers: {
-            apikey: env.METEOFRANCE_API_KEY
-          }
-        });
+      const capResponse = await fetch(capUrl, {
+        headers: {
+          apikey: env.METEOFRANCE_API_KEY
+        }
+      });
 
-      const catalogue =
-        await capResponse.text();
+      const catalogue = await capResponse.text();
 
       if (!capResponse.ok) {
-
         return new Response(
           JSON.stringify({
             ok: false,
@@ -49,12 +45,11 @@ export default {
             }
           }
         );
-
       }
 
 
       // ==================================================
-      // 2. CHERCHE LES COVERAGES P2D
+      // 2. RECHERCHE DES COVERAGES P2D
       // ==================================================
 
       const regex =
@@ -63,16 +58,13 @@ export default {
       const couvertures = [];
 
       for (const match of catalogue.matchAll(regex)) {
-
         couvertures.push({
           coverageId: match[1],
           run: match[2]
         });
-
       }
 
       if (couvertures.length === 0) {
-
         return new Response(
           JSON.stringify({
             ok: false,
@@ -87,27 +79,23 @@ export default {
             }
           }
         );
-
       }
 
 
       // ==================================================
-      // 3. PREND LE RUN LE PLUS RECENT
+      // 3. RUN LE PLUS RECENT
       // ==================================================
 
-      couvertures.sort(
-        (a, b) =>
-          a.run.localeCompare(b.run)
+      couvertures.sort((a, b) =>
+        a.run.localeCompare(b.run)
       );
 
       const dernier =
-        couvertures[
-          couvertures.length - 1
-        ];
+        couvertures[couvertures.length - 1];
 
 
       // ==================================================
-      // 4. CONVERTIT L'HEURE DU RUN
+      // 4. CONVERSION DE L'HEURE DU RUN
       // ==================================================
 
       const runIso =
@@ -118,7 +106,7 @@ export default {
 
 
       // ==================================================
-      // 5. ÉCHÉANCE +48 H
+      // 5. ECHEANCE +48 H
       // ==================================================
 
       const echeance =
@@ -133,6 +121,10 @@ export default {
       // ==================================================
       // 6. GETCOVERAGE
       // ==================================================
+      //
+      // On demande une petite emprise autour de Chartrettes.
+      // Cela permet d'obtenir un vrai GeoTIFF 2D.
+      //
 
       const params =
         new URLSearchParams();
@@ -161,7 +153,7 @@ export default {
         "subset",
         "lat(48.48,48.50)"
       );
-      
+
       params.append(
         "subset",
         "long(2.69,2.71)"
@@ -191,106 +183,215 @@ export default {
         );
 
 
-const buffer =
-  await coverageResponse.arrayBuffer();
-// ==================================================
-// LECTURE DU GEOTIFF
-// ==================================================
-
-const tiff =
-  await fromArrayBuffer(buffer);
-
-const image =
-  await tiff.getImage();
-
-const width =
-  image.getWidth();
-
-const height =
-  image.getHeight();
-
-const bbox =
-  image.getBoundingBox();
-
-const raster =
-  await image.readRasters({
-    interleave: true
-  });
+      const buffer =
+        await coverageResponse.arrayBuffer();
 
 
-// ==================================================
-// POSITION DE CHARTRETTES DANS LE RASTER
-// ==================================================
+      // ==================================================
+      // 7. ERREUR GETCOVERAGE
+      // ==================================================
 
-const xmin = bbox[0];
-const ymin = bbox[1];
-const xmax = bbox[2];
-const ymax = bbox[3];
+      if (!coverageResponse.ok) {
 
-const colonne =
-  Math.floor(
-    ((LON - xmin) /
-    (xmax - xmin)) *
-    width
-  );
+        const message =
+          new TextDecoder()
+            .decode(buffer);
 
-const ligne =
-  Math.floor(
-    ((ymax - LAT) /
-    (ymax - ymin)) *
-    height
-  );
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            etape: "GetCoverage",
+            status:
+              coverageResponse.status,
+            message
+          }, null, 2),
+          {
+            status: 500,
+            headers: {
+              "content-type":
+                "application/json;charset=UTF-8"
+            }
+          }
+        );
 
-const index =
-  ligne * width + colonne;
-
-const valeurBrute =
-  raster[index];
+      }
 
 
-// ==================================================
-// RESULTAT
-// ==================================================
+      // ==================================================
+      // 8. LECTURE DU GEOTIFF
+      // ==================================================
 
-return new Response(
-  JSON.stringify({
+      const tiff =
+        await fromArrayBuffer(buffer);
 
-    ok: true,
+      const image =
+        await tiff.getImage();
 
-    point: {
-      nom: "Chartrettes",
-      latitude: LAT,
-      longitude: LON
-    },
 
-    run:
-      dernier.run,
+      const width =
+        image.getWidth();
 
-    echeance_48h:
-      echeance,
+      const height =
+        image.getHeight();
 
-    geotiff: {
-      largeur: width,
-      hauteur: height,
-      bbox: bbox,
-      origine: image.getOrigin(),
-      resolution: image.getResolution()
-    },
+      const bbox =
+        image.getBoundingBox();
 
-    pixel: {
-      ligne: ligne,
-      colonne: colonne,
-      index: index
-    },
+      const origin =
+        image.getOrigin();
 
-    valeur_brute:
-      valeurBrute
+      const resolution =
+        image.getResolution();
 
-  }, null, 2),
-  {
-    headers: {
-      "content-type":
-        "application/json;charset=UTF-8"
+
+      // ==================================================
+      // 9. LECTURE DES VALEURS
+      // ==================================================
+
+      const raster =
+        await image.readRasters({
+          interleave: true
+        });
+
+
+      // ==================================================
+      // 10. LOCALISATION DE CHARTRETTES
+      // ==================================================
+
+      const xmin =
+        bbox[0];
+
+      const ymin =
+        bbox[1];
+
+      const xmax =
+        bbox[2];
+
+      const ymax =
+        bbox[3];
+
+
+      const colonne =
+        Math.floor(
+          (
+            (LON - xmin) /
+            (xmax - xmin)
+          ) *
+          width
+        );
+
+
+      const ligne =
+        Math.floor(
+          (
+            (ymax - LAT) /
+            (ymax - ymin)
+          ) *
+          height
+        );
+
+
+      const index =
+        ligne * width + colonne;
+
+
+      const valeurBrute =
+        raster[index];
+
+
+      // ==================================================
+      // 11. RESULTAT
+      // ==================================================
+
+      return new Response(
+        JSON.stringify({
+
+          ok: true,
+
+          point: {
+            nom: "Chartrettes",
+            latitude: LAT,
+            longitude: LON
+          },
+
+          run:
+            dernier.run,
+
+          coverageId:
+            dernier.coverageId,
+
+          echeance_48h:
+            echeance,
+
+          geotiff: {
+            largeur:
+              width,
+
+            hauteur:
+              height,
+
+            origine:
+              origin,
+
+            resolution:
+              resolution,
+
+            bbox:
+              bbox
+          },
+
+          pixel: {
+            ligne:
+              ligne,
+
+            colonne:
+              colonne,
+
+            index:
+              index
+          },
+
+          valeur_brute:
+            valeurBrute
+
+        }, null, 2),
+
+        {
+          headers: {
+            "content-type":
+              "application/json;charset=UTF-8"
+          }
+        }
+      );
+
+    } catch (error) {
+
+      return new Response(
+        JSON.stringify({
+
+          ok: false,
+
+          erreur:
+            error?.message ||
+            String(error),
+
+          stack:
+            error?.stack ||
+            null
+
+        }, null, 2),
+
+        {
+          status: 500,
+
+          headers: {
+            "content-type":
+              "application/json;charset=UTF-8"
+          }
+        }
+      );
+
     }
+
   }
-);
+};
