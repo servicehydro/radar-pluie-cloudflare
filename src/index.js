@@ -193,33 +193,99 @@ export default {
 
 const buffer =
   await coverageResponse.arrayBuffer();
+// ==================================================
+// LECTURE DU GEOTIFF
+// ==================================================
 
-const bytes =
-  new Uint8Array(buffer);
+const tiff =
+  await fromArrayBuffer(buffer);
 
-const hex =
-  Array.from(bytes.slice(0, 32))
-    .map(b =>
-      b.toString(16).padStart(2, "0")
-    )
-    .join(" ");
+const image =
+  await tiff.getImage();
 
-const texte =
-  new TextDecoder()
-    .decode(bytes.slice(0, 200));
+const width =
+  image.getWidth();
+
+const height =
+  image.getHeight();
+
+const bbox =
+  image.getBoundingBox();
+
+const raster =
+  await image.readRasters({
+    interleave: true
+  });
+
+
+// ==================================================
+// POSITION DE CHARTRETTES DANS LE RASTER
+// ==================================================
+
+const xmin = bbox[0];
+const ymin = bbox[1];
+const xmax = bbox[2];
+const ymax = bbox[3];
+
+const colonne =
+  Math.floor(
+    ((LON - xmin) /
+    (xmax - xmin)) *
+    width
+  );
+
+const ligne =
+  Math.floor(
+    ((ymax - LAT) /
+    (ymax - ymin)) *
+    height
+  );
+
+const index =
+  ligne * width + colonne;
+
+const valeurBrute =
+  raster[index];
+
+
+// ==================================================
+// RESULTAT
+// ==================================================
 
 return new Response(
   JSON.stringify({
-    ok: coverageResponse.ok,
-    status: coverageResponse.status,
-    contentType:
-      coverageResponse.headers.get("content-type"),
-    contentDisposition:
-      coverageResponse.headers.get("content-disposition"),
-    taille_octets:
-      buffer.byteLength,
-    premiers_octets_hex: hex,
-    debut_texte: texte
+
+    ok: true,
+
+    point: {
+      nom: "Chartrettes",
+      latitude: LAT,
+      longitude: LON
+    },
+
+    run:
+      dernier.run,
+
+    echeance_48h:
+      echeance,
+
+    geotiff: {
+      largeur: width,
+      hauteur: height,
+      bbox: bbox,
+      origine: image.getOrigin(),
+      resolution: image.getResolution()
+    },
+
+    pixel: {
+      ligne: ligne,
+      colonne: colonne,
+      index: index
+    },
+
+    valeur_brute:
+      valeurBrute
+
   }, null, 2),
   {
     headers: {
@@ -228,136 +294,3 @@ return new Response(
     }
   }
 );
-
-
-      // ==================================================
-      // 7. ERREUR GETCOVERAGE
-      // ==================================================
-
-      if (!coverageResponse.ok) {
-
-        const message =
-          new TextDecoder()
-            .decode(buffer);
-
-        return new Response(
-          JSON.stringify({
-            ok: false,
-            etape: "GetCoverage",
-            status:
-              coverageResponse.status,
-            message
-          }, null, 2),
-          {
-            status: 500,
-            headers: {
-              "content-type":
-                "application/json;charset=UTF-8"
-            }
-          }
-        );
-
-      }
-
-
-      // ==================================================
-      // 8. LECTURE DU GEOTIFF
-      // ==================================================
-
-      const tiff =
-        await fromArrayBuffer(
-          buffer
-        );
-
-      const image =
-        await tiff.getImage();
-
-
-      const raster =
-        await image.readRasters({
-          interleave: true
-        });
-
-
-      // ==================================================
-      // 9. RESULTAT
-      // ==================================================
-
-      return new Response(
-        JSON.stringify({
-          ok: true,
-
-          point: {
-            nom: "Chartrettes",
-            latitude: LAT,
-            longitude: LON
-          },
-
-          run:
-            dernier.run,
-
-          coverageId:
-            dernier.coverageId,
-
-          echeance_48h:
-            echeance,
-
-          geotiff: {
-            largeur:
-              image.getWidth(),
-
-            hauteur:
-              image.getHeight(),
-
-            nombre_bandes:
-              image.getSamplesPerPixel(),
-
-            origine:
-              image.getOrigin(),
-
-            resolution:
-              image.getResolution(),
-
-            bbox:
-              image.getBoundingBox()
-          },
-
-          valeur_brute:
-            raster[0]
-
-        }, null, 2),
-        {
-          headers: {
-            "content-type":
-              "application/json;charset=UTF-8"
-          }
-        }
-      );
-
-
-    } catch (error) {
-
-      return new Response(
-        JSON.stringify({
-          ok: false,
-          erreur:
-            error?.message ||
-            String(error),
-
-          stack:
-            error?.stack || null
-        }, null, 2),
-        {
-          status: 500,
-          headers: {
-            "content-type":
-              "application/json;charset=UTF-8"
-          }
-        }
-      );
-
-    }
-
-  }
-
-};
