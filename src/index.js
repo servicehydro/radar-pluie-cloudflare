@@ -191,8 +191,43 @@ export default {
         );
 
 
-      const buffer =
-        await coverageResponse.arrayBuffer();
+const buffer =
+  await coverageResponse.arrayBuffer();
+
+const bytes =
+  new Uint8Array(buffer);
+
+const hex =
+  Array.from(bytes.slice(0, 32))
+    .map(b =>
+      b.toString(16).padStart(2, "0")
+    )
+    .join(" ");
+
+const texte =
+  new TextDecoder()
+    .decode(bytes.slice(0, 200));
+
+return new Response(
+  JSON.stringify({
+    ok: coverageResponse.ok,
+    status: coverageResponse.status,
+    contentType:
+      coverageResponse.headers.get("content-type"),
+    contentDisposition:
+      coverageResponse.headers.get("content-disposition"),
+    taille_octets:
+      buffer.byteLength,
+    premiers_octets_hex: hex,
+    debut_texte: texte
+  }, null, 2),
+  {
+    headers: {
+      "content-type":
+        "application/json;charset=UTF-8"
+    }
+  }
+);
 
 
       // ==================================================
