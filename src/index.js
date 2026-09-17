@@ -89,10 +89,10 @@ export default {
     // Lecture du GeoTIFF
     const tiff =
       await fromArrayBuffer(buffer);
-
+    
     const image =
       await tiff.getImage();
-
+    
     const raster =
       await image.readRasters({
         interleave: true
