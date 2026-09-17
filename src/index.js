@@ -117,7 +117,7 @@ export default {
 
     params.set(
       "format",
-      "application/wmo-grib"
+      "image/tiff"
     );
 
     const coverageUrl =
