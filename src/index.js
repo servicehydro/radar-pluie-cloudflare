@@ -4,8 +4,19 @@ const BASE =
   "https://public-api.meteofrance.fr/public/arome/1.0/wcs/" +
   "MF-NWP-HIGHRES-AROME-001-FRANCE-WCS";
 
-const LAT = 48.4881157;
-const LON = 2.7005289;
+const POINTS = [
+  { nom: "Montargis", bassin: "Loing", position: "Amont", lat: 47.9978628, lon: 2.7310072 },
+  { nom: "Nemours", bassin: "Loing", position: "Médian", lat: 48.2680260, lon: 2.6953079 },
+  { nom: "Château-Landon", bassin: "Loing", position: "Aval", lat: 48.1496366, lon: 2.7032718 },
+
+  { nom: "Auxerre", bassin: "Yonne", position: "Amont", lat: 47.7961287, lon: 3.5705790 },
+  { nom: "Joigny", bassin: "Yonne", position: "Médian", lat: 47.9812486, lon: 3.3995767 },
+  { nom: "Pont-sur-Yonne", bassin: "Yonne", position: "Aval", lat: 48.2852895, lon: 3.2045813 },
+
+  { nom: "Nogent-sur-Seine", bassin: "Seine", position: "Amont", lat: 48.4924390, lon: 3.4978181 },
+  { nom: "Montereau", bassin: "Seine", position: "Médian", lat: 47.8564484, lon: 2.5717138 },
+  { nom: "Chartrettes", bassin: "Seine", position: "Aval", lat: 48.4881157, lon: 2.7005289 }
+];
 
 export default {
   async fetch(request, env) {
@@ -30,26 +41,13 @@ export default {
       const catalogue = await capResponse.text();
 
       if (!capResponse.ok) {
-        return new Response(
-          JSON.stringify({
-            ok: false,
-            etape: "GetCapabilities",
-            status: capResponse.status,
-            message: catalogue
-          }, null, 2),
-          {
-            status: 500,
-            headers: {
-              "content-type":
-                "application/json;charset=UTF-8"
-            }
-          }
+        throw new Error(
+          `GetCapabilities ${capResponse.status}: ${catalogue}`
         );
       }
 
-
       // ==================================================
-      // 2. RECHERCHE DES COVERAGES P2D
+      // 2. COVERAGE P2D
       // ==================================================
 
       const regex =
@@ -65,26 +63,8 @@ export default {
       }
 
       if (couvertures.length === 0) {
-        return new Response(
-          JSON.stringify({
-            ok: false,
-            erreur:
-              "Aucun coverage AROME P2D trouvé"
-          }, null, 2),
-          {
-            status: 500,
-            headers: {
-              "content-type":
-                "application/json;charset=UTF-8"
-            }
-          }
-        );
+        throw new Error("Aucun coverage AROME P2D trouvé");
       }
-
-
-      // ==================================================
-      // 3. RUN LE PLUS RECENT
-      // ==================================================
 
       couvertures.sort((a, b) =>
         a.run.localeCompare(b.run)
@@ -93,9 +73,8 @@ export default {
       const dernier =
         couvertures[couvertures.length - 1];
 
-
       // ==================================================
-      // 4. CONVERSION DE L'HEURE DU RUN
+      // 3. RUN -> ISO
       // ==================================================
 
       const runIso =
@@ -104,9 +83,8 @@ export default {
           "$1:$2:$3Z"
         );
 
-
       // ==================================================
-      // 5. ECHEANCE +48 H
+      // 4. ECHEANCE +48 H
       // ==================================================
 
       const echeance =
@@ -117,14 +95,37 @@ export default {
           .toISOString()
           .replace(".000Z", "Z");
 
+      // ==================================================
+      // 5. EMPRISE DES 9 POINTS
+      // ==================================================
+
+      const latMin =
+        Math.min(...POINTS.map(p => p.lat));
+
+      const latMax =
+        Math.max(...POINTS.map(p => p.lat));
+
+      const lonMin =
+        Math.min(...POINTS.map(p => p.lon));
+
+      const lonMax =
+        Math.max(...POINTS.map(p => p.lon));
+
+      const latMinDemande =
+        Math.floor(latMin * 100) / 100;
+
+      const latMaxDemande =
+        Math.ceil(latMax * 100) / 100;
+
+      const lonMinDemande =
+        Math.floor(lonMin * 100) / 100;
+
+      const lonMaxDemande =
+        Math.ceil(lonMax * 100) / 100;
 
       // ==================================================
       // 6. GETCOVERAGE
       // ==================================================
-      //
-      // On demande une petite emprise autour de Chartrettes.
-      // Cela permet d'obtenir un vrai GeoTIFF 2D.
-      //
 
       const params =
         new URLSearchParams();
@@ -151,12 +152,12 @@ export default {
 
       params.append(
         "subset",
-        "lat(48.48,48.50)"
+        `lat(${latMinDemande},${latMaxDemande})`
       );
 
       params.append(
         "subset",
-        "long(2.69,2.71)"
+        `long(${lonMinDemande},${lonMaxDemande})`
       );
 
       params.set(
@@ -164,12 +165,10 @@ export default {
         "image/tiff"
       );
 
-
       const coverageUrl =
         BASE +
         "/GetCoverage?" +
         params.toString();
-
 
       const coverageResponse =
         await fetch(
@@ -182,43 +181,20 @@ export default {
           }
         );
 
-
       const buffer =
         await coverageResponse.arrayBuffer();
 
-
-      // ==================================================
-      // 7. ERREUR GETCOVERAGE
-      // ==================================================
-
       if (!coverageResponse.ok) {
 
-        const message =
-          new TextDecoder()
-            .decode(buffer);
-
-        return new Response(
-          JSON.stringify({
-            ok: false,
-            etape: "GetCoverage",
-            status:
-              coverageResponse.status,
-            message
-          }, null, 2),
-          {
-            status: 500,
-            headers: {
-              "content-type":
-                "application/json;charset=UTF-8"
-            }
-          }
+        throw new Error(
+          `GetCoverage ${coverageResponse.status}: ` +
+          new TextDecoder().decode(buffer)
         );
 
       }
 
-
       // ==================================================
-      // 8. LECTURE DU GEOTIFF
+      // 7. LECTURE GEOTIFF
       // ==================================================
 
       const tiff =
@@ -227,15 +203,11 @@ export default {
       const image =
         await tiff.getImage();
 
-
       const width =
         image.getWidth();
 
       const height =
         image.getHeight();
-
-      const bbox =
-        image.getBoundingBox();
 
       const origin =
         image.getOrigin();
@@ -243,64 +215,57 @@ export default {
       const resolution =
         image.getResolution();
 
-
-      // ==================================================
-      // 9. LECTURE DES VALEURS
-      // ==================================================
+      const bbox =
+        image.getBoundingBox();
 
       const raster =
         await image.readRasters({
           interleave: true
         });
 
+      // ==================================================
+      // 8. EXTRACTION DES 9 POINTS
+      // ==================================================
+
+      const resultats =
+        POINTS.map(point => {
+
+          const colonne =
+            Math.floor(
+              (point.lon - origin[0]) /
+              resolution[0]
+            );
+
+          const ligne =
+            Math.floor(
+              (point.lat - origin[1]) /
+              resolution[1]
+            );
+
+          const index =
+            ligne * width + colonne;
+
+          const valeur =
+            raster[index];
+
+          return {
+            nom: point.nom,
+            bassin: point.bassin,
+            position: point.position,
+            latitude: point.lat,
+            longitude: point.lon,
+            pixel: {
+              ligne,
+              colonne
+            },
+            pluie_mm:
+              Number(valeur)
+          };
+
+        });
 
       // ==================================================
-      // 10. LOCALISATION DE CHARTRETTES
-      // ==================================================
-
-      const xmin =
-        bbox[0];
-
-      const ymin =
-        bbox[1];
-
-      const xmax =
-        bbox[2];
-
-      const ymax =
-        bbox[3];
-
-
-      const colonne =
-        Math.floor(
-          (
-            (LON - xmin) /
-            (xmax - xmin)
-          ) *
-          width
-        );
-
-
-      const ligne =
-        Math.floor(
-          (
-            (ymax - LAT) /
-            (ymax - ymin)
-          ) *
-          height
-        );
-
-
-      const index =
-        ligne * width + colonne;
-
-
-      const valeurBrute =
-        raster[index];
-
-
-      // ==================================================
-      // 11. RESULTAT
+      // 9. RESULTAT
       // ==================================================
 
       return new Response(
@@ -308,54 +273,27 @@ export default {
 
           ok: true,
 
-          point: {
-            nom: "Chartrettes",
-            latitude: LAT,
-            longitude: LON
-          },
-
           run:
             dernier.run,
-
-          coverageId:
-            dernier.coverageId,
 
           echeance_48h:
             echeance,
 
+          coverageId:
+            dernier.coverageId,
+
           geotiff: {
-            largeur:
-              width,
-
-            hauteur:
-              height,
-
-            origine:
-              origin,
-
-            resolution:
-              resolution,
-
-            bbox:
-              bbox
+            largeur: width,
+            hauteur: height,
+            origine: origin,
+            resolution,
+            bbox
           },
 
-          pixel: {
-            ligne:
-              ligne,
-
-            colonne:
-              colonne,
-
-            index:
-              index
-          },
-
-          valeur_brute:
-            valeurBrute
+          points:
+            resultats
 
         }, null, 2),
-
         {
           headers: {
             "content-type":
@@ -380,10 +318,8 @@ export default {
             null
 
         }, null, 2),
-
         {
           status: 500,
-
           headers: {
             "content-type":
               "application/json;charset=UTF-8"
@@ -392,6 +328,5 @@ export default {
       );
 
     }
-
   }
 };
