@@ -220,6 +220,7 @@ export default {
     return new Response(
       JSON.stringify({
         ok: coverageResponse.ok,
+        version: "GEOTIFF_TEST_1",
         run: dernier.run,
         coverageId: dernier.coverageId,
         echeance_48h: echeance,
