@@ -91,7 +91,7 @@ export default {
       new Date(
         new Date(runIso).getTime() +
         48 * 60 * 60 * 1000
-      ).toISOString();
+      ).toISOString()
     .replace(".000Z", "Z");
 
     // --------------------------------------------------
