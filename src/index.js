@@ -217,24 +217,30 @@ export default {
           .substring(0, 3000);
     }
 
-    return new Response(
-      JSON.stringify({
-        ok: coverageResponse.ok,
-        version: "GEOTIFF_TEST_1",
-        run: dernier.run,
-        coverageId: dernier.coverageId,
-        echeance_48h: echeance,
-        status: coverageResponse.status,
-        contentType,
-        taille_octets: buffer.byteLength,
-        apercu
-      }, null, 2),
-      {
-        headers: {
-          "content-type":
-            "application/json;charset=UTF-8"
-        }
+  return new Response(
+    JSON.stringify({
+      ok: true,
+      version: "GEOTIFF_TEST_2",
+      run: dernier.run,
+      coverageId: dernier.coverageId,
+      echeance_48h: echeance,
+  
+      largeur: image.getWidth(),
+      hauteur: image.getHeight(),
+  
+      valeur_brute: raster[0],
+  
+      origine: image.getOrigin(),
+      resolution: image.getResolution(),
+      bbox: image.getBoundingBox()
+  
+    }, null, 2),
+    {
+      headers: {
+        "content-type":
+          "application/json;charset=UTF-8"
       }
-    );
+    }
+  );
   }
 };
