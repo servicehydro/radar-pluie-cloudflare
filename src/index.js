@@ -159,12 +159,12 @@ export default {
 
       params.append(
         "subset",
-        `lat(${LAT})`
+        "lat(48.48,48.50)"
       );
-
+      
       params.append(
         "subset",
-        `long(${LON})`
+        "long(2.69,2.71)"
       );
 
       params.set(
